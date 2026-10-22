@@ -1,14 +1,17 @@
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall
-OBJS = Person.o Student.o Instructor.o Roster.o main.o
+CXXFLAGS = -std=c++11 -Wall
 
-roster: $(OBJS)
-	$(CXX) $(CXXFLAGS) -o roster $(OBJS)
+SRCS = main.cpp Stop.cpp BusStop.cpp TrainStop.cpp Route.cpp
+OBJS = $(SRCS:.cpp=.o)
+TARGET = campusnav
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(CXX) $(CXXFLAGS) -o $(TARGET) $(OBJS)
 
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $<
 
 clean:
-	rm -f *.o roster roster.exe
-
-.PHONY: clean
+	rm -f $(OBJS) $(TARGET)

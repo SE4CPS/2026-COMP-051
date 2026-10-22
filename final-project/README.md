@@ -1,44 +1,42 @@
-# Final Project: Roster Manager
+# Final Project: CampusNav
 
-**Points:** TBD. **Due:** TBD (Pacific time).
+A playable campus-shuttle route navigator, built on classes,
+inheritance, and polymorphism. The starter code already compiles
+and runs: your job is to extend it, not rebuild it from scratch.
 
-## What you're building
+## What's already here
 
-A console C++ program that manages a roster of people (students and
-instructors) using the ideas from Modules 5–10: a base class, two
-derived classes, polymorphism through a base-class pointer, a vector
-of records, and saving/loading data with file streams.
-
-The starter code in `starter/` already compiles and runs — it's your
-foundation, not a blank page. Extend it; don't start over.
-
-## Starter code structure
-
-| File | What it defines |
-|---|---|
-| `Person.h` / `Person.cpp` | Base class: name, id, virtual `display()`/`getRole()` |
-| `Student.h` / `Student.cpp` | Derived class: adds a GPA, overrides `display()`/`getRole()` |
-| `Instructor.h` / `Instructor.cpp` | Derived class: adds a department, overrides `display()`/`getRole()` |
-| `Roster.h` / `Roster.cpp` | Holds a `vector<Person*>`, can add/display/save records |
-| `main.cpp` | Builds a small roster and demonstrates each piece |
-| `Makefile` | Builds everything with one `make` command |
-
-A single-file version (everything combined into one `.cpp`, for pasting
-into an online compiler) is in `single-file/roster_manager.cpp`.
+- `Stop`: base class for a stop on the route (name, distance)
+- `BusStop`, `TrainStop`: two derived stop types, each with its
+  own extra field (bus bay, platform number)
+- `Route`: holds the ordered list of stops and plays the game:
+  validates stop names, walks the route stop by stop, counts
+  down to the destination, applies a rush-hour rule, and reports
+  total distance and estimated travel time
+- `main.cpp`: the playable loop. Prompts for a starting stop, a
+  destination, and the current hour, then plays the trip.
 
 ## Minimum requirements
 
-- At least one more derived class of your own (e.g. `TA`, `Staff`) that
-  overrides `display()`/`getRole()`.
-- At least one new field/behavior on the existing classes that's
-  meaningfully yours, not just a renamed copy of what's here.
-- `Roster::saveToFile()` and a matching `loadFromFile()` that can read
-  the data back in.
-- A short `README` section (add it to this file, or a new one) telling
-  a reader what your program does and how to run it.
+- Add your own derived stop type (not Bus or Train) with a
+  meaningfully new field of its own
+- Implement `Route::loadFromFile()` (currently a stub that
+  always returns `false`) so the route can load from a text
+  file instead of the hardcoded default
+- A short `README.md` of your own describing what you added
+- Keep the game playable: it should still compile and run after
+  your changes
 
-## Submission
+## Get the code
 
-Submit via Canvas. Groups OK, but by submitting you're confirming you
-personally understand the work. AI is fine to use, but clearly state
-which parts used AI and which parts you did without it.
+Single file (no install needed, paste into [OnlineGDB](https://www.onlinegdb.com/online_c%2B%2B_compiler)):
+`single-file/campusnav.cpp`
+
+Local build (needs Git + a C++ compiler):
+
+```
+git clone https://github.com/SE4CPS/2026-COMP-051.git
+cd 2026-COMP-051/final-project/starter
+make
+./campusnav
+```
