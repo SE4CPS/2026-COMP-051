@@ -1,0 +1,6 @@
+BUS,Argonne Hall,0.0,2
+TRAIN,Westgate Station,1.2,1
+BUS,Market Square,2.4,3
+TRAIN,Harborview Junction,3.8,2
+BUS,Pinecrest Commons,5.0,1
+TRAIN,Summit Terminal,6.3,4

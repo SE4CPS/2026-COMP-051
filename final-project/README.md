@@ -16,6 +16,24 @@ and runs: your job is to extend it, not rebuild it from scratch.
 - `main.cpp`: the playable loop. Prompts for a starting stop, a
   destination, and the current hour, then plays the trip.
 
+## Sample data file
+
+`starter/route.txt` is a sample route in the format
+`loadFromFile()` should read: one stop per line,
+`TYPE,name,distance,extra` (`TYPE` is `BUS` or `TRAIN`). It's a
+different route than the hardcoded default, so once your
+`loadFromFile()` works, the printed route should change to this
+one instead of the default:
+
+```
+BUS,Argonne Hall,0.0,2
+TRAIN,Westgate Station,1.2,1
+BUS,Market Square,2.4,3
+TRAIN,Harborview Junction,3.8,2
+BUS,Pinecrest Commons,5.0,1
+TRAIN,Summit Terminal,6.3,4
+```
+
 ## Minimum requirements
 
 - Add your own derived stop type (not Bus or Train) with a
