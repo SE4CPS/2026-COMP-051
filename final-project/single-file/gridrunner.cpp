@@ -161,12 +161,17 @@ int main() {
     int currentDir = 0; // last direction picked; 0 = none yet
     auto lastMoveTime = chrono::steady_clock::now();
 
+    bool needRedraw = true; // only redraw when something actually changed
+
     while (!gameOver) {
-        system("cls");
-        printGrid(grid, car, dest.first, dest.second);
-        cout << "Arrows move. A = toggle auto-drive (" << moveIntervalSec << "s). "
-             << "Auto-drive: " << (autoDrive ? "ON" : "OFF")
-             << ", direction: " << directionName(currentDir) << "\n";
+        if (needRedraw) {
+            system("cls");
+            printGrid(grid, car, dest.first, dest.second);
+            cout << "Arrows move. A = toggle auto-drive (" << moveIntervalSec << "s). "
+                 << "Auto-drive: " << (autoDrive ? "ON" : "OFF")
+                 << ", direction: " << directionName(currentDir) << "\n";
+            needRedraw = false;
+        }
 
         int newRow = car.row;
         int newCol = car.col;
@@ -182,10 +187,12 @@ int main() {
 
             if (key == 'a' || key == 'A') {
                 autoDrive = false;
+                needRedraw = true;
                 continue;
             }
             if (key == 72 || key == 80 || key == 75 || key == 77) {
                 currentDir = key; // change direction; still waits for the next tick
+                needRedraw = true; // update the status line's direction label now
             }
 
             auto now = chrono::steady_clock::now();
@@ -205,6 +212,7 @@ int main() {
                     autoDrive = true;
                     lastMoveTime = chrono::steady_clock::now();
                 }
+                needRedraw = true;
                 continue;
             }
         }
@@ -214,8 +222,10 @@ int main() {
             case 80: newRow++; currentDir = 80; break; // Down
             case 75: newCol--; currentDir = 75; break; // Left
             case 77: newCol++; currentDir = 77; break; // Right
-            default: continue; // unrecognized key, ignore and redraw
+            default: continue; // unrecognized key, nothing changed
         }
+
+        needRedraw = true;
 
         if (!grid.isInBounds(newRow, newCol)) {
             cout << "Off the grid: crashed!\n";
