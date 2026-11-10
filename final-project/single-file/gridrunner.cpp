@@ -114,6 +114,7 @@ int main() {
     cout << "GridRunner: use the arrow keys. C = you, D = destination.\n";
 
     while (!gameOver) {
+        system("cls");
         printGrid(grid, car, dest.first, dest.second);
 
         int newRow = car.row;
