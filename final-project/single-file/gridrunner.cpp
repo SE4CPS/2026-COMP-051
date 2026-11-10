@@ -209,13 +209,25 @@ int main() {
     int currentDir = 0; // last direction picked; 0 = none yet
     auto lastMoveTime = chrono::steady_clock::now();        // player's own auto-drive tick
     auto lastRandomMoveTime = chrono::steady_clock::now();  // random cars' tick
+    auto startTime = chrono::steady_clock::now();           // whole-run timer
 
     bool needRedraw = true; // only redraw when something actually changed
 
     while (!gameOver) {
+        // The clock itself ticks every loop (not just on needRedraw), so the
+        // on-screen timer updates every second even while nothing else changed.
+        int elapsedWhole = (int)chrono::duration<double>(
+            chrono::steady_clock::now() - startTime).count();
+        static int lastShownSec = -1;
+        if (elapsedWhole != lastShownSec) {
+            lastShownSec = elapsedWhole;
+            needRedraw = true;
+        }
+
         if (needRedraw) {
             system("cls");
             printGrid(grid, car, dest.first, dest.second, randomCars);
+            cout << "Time: " << elapsedWhole << "s | ";
             cout << "Arrows move. A = toggle auto-drive (" << moveIntervalSec << "s). "
                  << "Auto-drive: " << (autoDrive ? "ON" : "OFF")
                  << ", direction: " << directionName(currentDir);
@@ -312,6 +324,12 @@ int main() {
                 cout << "You arrived!\n";
                 gameOver = true;
             }
+        }
+
+        if (gameOver) {
+            double totalSec = chrono::duration<double>(
+                chrono::steady_clock::now() - startTime).count();
+            cout << "Time: " << totalSec << " seconds\n";
         }
     }
 
