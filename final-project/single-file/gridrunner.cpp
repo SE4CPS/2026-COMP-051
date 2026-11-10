@@ -3,6 +3,9 @@
 // destination on a grid that fills the console window. Press A to
 // toggle auto-drive: the car keeps moving in the last direction you
 // picked, once per interval, without you pressing anything.
+// Random "parallel cars" (shown as R) can also roam the grid on their
+// own, moving in a random direction every interval, independent of
+// whether your own auto-drive is on or off.
 // Hit a wall or the edge and you lose.
 // Build in Visual Studio (Windows only - uses <conio.h> and <windows.h>).
 #include <iostream>
@@ -75,11 +78,21 @@ pair<int, int> randomCell(int rows, int cols) {
     return { rand() % rows, rand() % cols };
 }
 
-void printGrid(const Grid& grid, const Car& car, int destRow, int destCol) {
+void printGrid(const Grid& grid, const Car& car, int destRow, int destCol,
+               const vector<Car>& randomCars) {
     for (int r = 0; r < grid.rows; r++) {
         for (int c = 0; c < grid.cols; c++) {
+            bool isRandomCar = false;
+            for (size_t i = 0; i < randomCars.size(); i++) {
+                if (randomCars[i].row == r && randomCars[i].col == c) {
+                    isRandomCar = true;
+                    break;
+                }
+            }
+
             if (r == car.row && c == car.col) cout << 'C';
             else if (r == destRow && c == destCol) cout << 'D';
+            else if (isRandomCar) cout << 'R';
             else cout << grid.cells[r][c];
         }
         cout << "\n";
@@ -88,6 +101,27 @@ void printGrid(const Grid& grid, const Car& car, int destRow, int destCol) {
 
 bool checkWin(const Car& car, int destRow, int destCol) {
     return car.row == destRow && car.col == destCol;
+}
+
+// Picks one of the 4 directions at random and moves the car there if
+// it's a legal move. If the random pick is a wall or off the grid, the
+// car just stays put for this tick and tries again next time.
+void moveRandomCar(Car& c, const Grid& grid) {
+    int dirs[4] = { 72, 80, 75, 77 }; // Up, Down, Left, Right
+    int pick = dirs[rand() % 4];
+
+    int newRow = c.row;
+    int newCol = c.col;
+    switch (pick) {
+        case 72: newRow--; break;
+        case 80: newRow++; break;
+        case 75: newCol--; break;
+        case 77: newCol++; break;
+    }
+
+    if (grid.isInBounds(newRow, newCol) && !grid.isWall(newRow, newCol)) {
+        c.moveTo(newRow, newCol);
+    }
 }
 
 // Reads the visible console window size in characters. Falls back to a
@@ -156,17 +190,32 @@ int main() {
     cin >> moveIntervalSec;
     if (moveIntervalSec <= 0) moveIntervalSec = 1.0;
 
+    cout << "How many random parallel cars? (0 for none): ";
+    int numRandomCars = 0;
+    cin >> numRandomCars;
+    if (numRandomCars < 0) numRandomCars = 0;
+
+    vector<Car> randomCars(numRandomCars);
+    for (int i = 0; i < numRandomCars; i++) {
+        pair<int, int> spot;
+        do {
+            spot = randomCell(gridRows, gridCols);
+        } while (grid.isWall(spot.first, spot.second) || spot == start || spot == dest);
+        randomCars[i].moveTo(spot.first, spot.second);
+    }
+
     bool gameOver = false;
     bool autoDrive = false;
     int currentDir = 0; // last direction picked; 0 = none yet
-    auto lastMoveTime = chrono::steady_clock::now();
+    auto lastMoveTime = chrono::steady_clock::now();        // player's own auto-drive tick
+    auto lastRandomMoveTime = chrono::steady_clock::now();  // random cars' tick
 
     bool needRedraw = true; // only redraw when something actually changed
 
     while (!gameOver) {
         if (needRedraw) {
             system("cls");
-            printGrid(grid, car, dest.first, dest.second);
+            printGrid(grid, car, dest.first, dest.second, randomCars);
             cout << "Arrows move. A = toggle auto-drive (" << moveIntervalSec << "s). "
                  << "Auto-drive: " << (autoDrive ? "ON" : "OFF")
                  << ", direction: " << directionName(currentDir);
@@ -180,53 +229,72 @@ int main() {
         int newRow = car.row;
         int newCol = car.col;
         int key = -1;
+        bool playerMoved = false;
 
-        if (autoDrive) {
-            // Non-blocking check: the car should keep moving on its own
-            // even if the player doesn't press anything this frame.
-            if (_kbhit()) {
-                key = _getch();
-                if (key == 224) key = _getch();
-            }
-
-            if (key == 'a' || key == 'A') {
-                autoDrive = false;
-                needRedraw = true;
-                continue;
-            }
-            if (key == 72 || key == 80 || key == 75 || key == 77) {
-                currentDir = key; // change direction; still waits for the next tick
-                needRedraw = true; // update the status line's direction label now
-            }
-
-            auto now = chrono::steady_clock::now();
-            double elapsed = chrono::duration<double>(now - lastMoveTime).count();
-            if (elapsed < moveIntervalSec) {
-                Sleep(30); // small pause so we don't spin the CPU while waiting
-                continue;
-            }
-            lastMoveTime = now;
-            key = currentDir;
-        } else {
+        // Always a non-blocking key check (even in manual mode), so the
+        // random cars keep moving on their own interval whether or not
+        // the player is pressing anything.
+        if (_kbhit()) {
             key = _getch();
             if (key == 224) key = _getch();
+        }
 
-            if (key == 'a' || key == 'A') {
-                if (currentDir != 0) {
-                    autoDrive = true;
-                    lastMoveTime = chrono::steady_clock::now();
+        if (key == 'a' || key == 'A') {
+            if (autoDrive) {
+                autoDrive = false;
+            } else if (currentDir != 0) {
+                autoDrive = true;
+                lastMoveTime = chrono::steady_clock::now();
+            }
+            needRedraw = true;
+        } else if (key == 72 || key == 80 || key == 75 || key == 77) {
+            currentDir = key; // remember the direction either way
+            needRedraw = true;
+            if (!autoDrive) {
+                // Manual mode: move right away on key press.
+                switch (key) {
+                    case 72: newRow--; break;
+                    case 80: newRow++; break;
+                    case 75: newCol--; break;
+                    case 77: newCol++; break;
                 }
-                needRedraw = true;
-                continue;
+                playerMoved = true;
             }
         }
 
-        switch (key) {
-            case 72: newRow--; currentDir = 72; break; // Up
-            case 80: newRow++; currentDir = 80; break; // Down
-            case 75: newCol--; currentDir = 75; break; // Left
-            case 77: newCol++; currentDir = 77; break; // Right
-            default: continue; // unrecognized key, nothing changed
+        if (autoDrive && !playerMoved) {
+            auto now = chrono::steady_clock::now();
+            double elapsed = chrono::duration<double>(now - lastMoveTime).count();
+            if (elapsed >= moveIntervalSec) {
+                lastMoveTime = now;
+                switch (currentDir) {
+                    case 72: newRow--; break; // Up
+                    case 80: newRow++; break; // Down
+                    case 75: newCol--; break; // Left
+                    case 77: newCol++; break; // Right
+                }
+                playerMoved = true;
+            }
+        }
+
+        // Random cars tick on the same interval as auto-drive, but on
+        // their own clock -- they keep moving even if the player's own
+        // auto-drive is off or hasn't started yet.
+        if (!randomCars.empty()) {
+            auto now = chrono::steady_clock::now();
+            double elapsed = chrono::duration<double>(now - lastRandomMoveTime).count();
+            if (elapsed >= moveIntervalSec) {
+                lastRandomMoveTime = now;
+                for (size_t i = 0; i < randomCars.size(); i++) {
+                    moveRandomCar(randomCars[i], grid);
+                }
+                needRedraw = true;
+            }
+        }
+
+        if (!playerMoved) {
+            if (!needRedraw) Sleep(30); // avoid spinning the CPU while nothing happens
+            continue;
         }
 
         needRedraw = true;
@@ -240,7 +308,7 @@ int main() {
         } else {
             car.moveTo(newRow, newCol);
             if (checkWin(car, dest.first, dest.second)) {
-                printGrid(grid, car, dest.first, dest.second);
+                printGrid(grid, car, dest.first, dest.second, randomCars);
                 cout << "You arrived!\n";
                 gameOver = true;
             }
