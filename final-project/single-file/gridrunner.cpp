@@ -169,7 +169,11 @@ int main() {
             printGrid(grid, car, dest.first, dest.second);
             cout << "Arrows move. A = toggle auto-drive (" << moveIntervalSec << "s). "
                  << "Auto-drive: " << (autoDrive ? "ON" : "OFF")
-                 << ", direction: " << directionName(currentDir) << "\n";
+                 << ", direction: " << directionName(currentDir);
+            if (!autoDrive && currentDir == 0) {
+                cout << " (press an arrow key first, then A)";
+            }
+            cout << "\n";
             needRedraw = false;
         }
 
