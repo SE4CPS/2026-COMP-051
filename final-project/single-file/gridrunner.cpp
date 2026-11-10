@@ -90,10 +90,18 @@ void printGrid(const Grid& grid, const Car& car, int destRow, int destCol,
                 }
             }
 
-            if (r == car.row && c == car.col) cout << 'C';
-            else if (r == destRow && c == destCol) cout << 'D';
-            else if (isRandomCar) cout << 'R';
-            else cout << grid.cells[r][c];
+            char ch;
+            if (r == car.row && c == car.col) ch = 'C';
+            else if (r == destRow && c == destCol) ch = 'D';
+            else if (isRandomCar) ch = 'R';
+            else ch = grid.cells[r][c];
+
+            // A monospace character cell is about twice as tall as it
+            // is wide, so printing a trailing space after each one
+            // doubles its on-screen width -- that's what makes an
+            // NxN grid actually look square instead of twice as wide
+            // as it is tall.
+            cout << ch << ' ';
         }
         cout << "\n";
     }
@@ -156,8 +164,11 @@ int main() {
 
     // Leave a few lines below the grid for the status line and the
     // win/lose message, and one less column so the last cell doesn't
-    // land exactly on the console's auto-wrap edge.
-    int gridCols = consoleCols - 1;
+    // land exactly on the console's auto-wrap edge. Each printed cell
+    // is now 2 characters wide (see printGrid), so divide the usable
+    // width by 2 to get the actual column count -- this is also what
+    // makes a square grid come out visually square on screen.
+    int gridCols = (consoleCols - 1) / 2;
     int gridRows = consoleRows - 4;
 
     try {
