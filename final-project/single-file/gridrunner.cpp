@@ -3,41 +3,164 @@
 // destination on a grid that fills the console window. Press A to
 // toggle auto-drive: the car keeps moving in the last direction you
 // picked, once per interval, without you pressing anything.
-// Random "parallel cars" (shown as R) can also roam the grid on their
-// own, moving in a random direction every interval, independent of
-// whether your own auto-drive is on or off.
-// Hit a wall or the edge and you lose.
+// Roads (not grass) are where you're allowed to drive; a speed road
+// makes you move faster, a tunnel hides your car while you're on it,
+// and two kinds of obstacles -- walls and potholes -- behave
+// differently when you hit them. Press F to toggle weather fog
+// (you can only see a radius around the car), and E to toggle emoji
+// tiles. Random "parallel cars" (shown as R, or a car emoji) roam the
+// roads on their own.
+// Hit a wall or the edge and you lose -- press R at the end to try
+// again with a brand new grid.
 // Build in Visual Studio (Windows only - uses <conio.h> and <windows.h>).
+//
+// NOTE on emoji: the emoji glyphs below are written as raw UTF-8 byte
+// escapes (\xNN...), not literal characters, specifically so they
+// don't depend on the compiler's source-file encoding or any extra
+// compiler flag -- they'll compile correctly in plain MSVC or g++
+// either way. What they still depend on is the TERMINAL: you need a
+// UTF-8-aware console with a color-emoji-capable font (Windows
+// Terminal + a font like Segoe UI Emoji) for them to render as actual
+// pictures. On an older console (classic cmd.exe) they may show as
+// boxes or '?'. That's exactly why emoji mode defaults to OFF and can
+// be toggled with E -- the color-coded ASCII tiles always work.
 #include <iostream>
 #include <string>
 #include <vector>
 #include <cstdlib>
 #include <ctime>
 #include <chrono>
+#include <algorithm>
 #include <windows.h>
 #include <conio.h>
 using namespace std;
+
+// ---- Tile types -------------------------------------------------------
+// Every grid cell is exactly one of these. Roads (and the two special
+// roads, speed/tunnel) are drivable; grass is not. Walls and potholes
+// are obstacles that sit on a cell instead of a plain road.
+const char GRASS = '.';
+const char ROAD = 'o';
+const char SPEED_ROAD = 's';
+const char TUNNEL = 't';
+const char WALL = '#';
+const char POTHOLE = 'p';
+
+// ---- Console colors -----------------------------------------------------
+void setColor(int color) {
+    SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), (WORD)color);
+}
+const int COLOR_GRASS = 2;      // dark green
+const int COLOR_ROAD = 8;       // dark gray
+const int COLOR_SPEED = 11;     // bright cyan
+const int COLOR_TUNNEL = 13;    // bright magenta
+const int COLOR_WALL = 12;      // bright red
+const int COLOR_POTHOLE = 6;    // brown/yellow
+const int COLOR_CAR = 14;       // bright yellow
+const int COLOR_DEST = 10;      // bright green
+const int COLOR_RANDOMCAR = 9;  // bright blue
+const int COLOR_FOG = 8;        // dark gray
+const int COLOR_DEFAULT = 7;    // light gray (console default)
+
+// ---- Sound --------------------------------------------------------------
+void playCrashSound() { Beep(200, 300); }
+void playTurnSound() { Beep(800, 60); }
+void playPotholeSound() { Beep(400, 200); }
 
 class Grid {
 public:
     int rows, cols;
     vector<vector<char>> cells;
 
-    Grid(int r, int c) : rows(r), cols(c), cells(r, vector<char>(c, '.')) {}
+    Grid(int r, int c) : rows(r), cols(c), cells(r, vector<char>(c, GRASS)) {}
 
-    bool isWall(int r, int c) const {
-        return cells[r][c] == '#';
-    }
+    bool isWall(int r, int c) const { return cells[r][c] == WALL; }
+    bool isPothole(int r, int c) const { return cells[r][c] == POTHOLE; }
+    bool isGrass(int r, int c) const { return cells[r][c] == GRASS; }
+    bool isSpeedRoad(int r, int c) const { return cells[r][c] == SPEED_ROAD; }
+    bool isTunnel(int r, int c) const { return cells[r][c] == TUNNEL; }
+
+    // "Blocked" means a car can never enter this cell -- either it's
+    // an obstacle (wall) or it's not a road at all (grass).
+    bool isBlocked(int r, int c) const { return isWall(r, c) || isGrass(r, c); }
 
     bool isInBounds(int r, int c) const {
         return r >= 0 && r < rows && c >= 0 && c < cols;
     }
 
-    void addRandomWalls(int count) {
+    // Carves a winding road from (r,c) to (destR,destC) by biasing a
+    // random walk toward the destination, so the road always actually
+    // connects start to finish. Returns every cell on that path, so
+    // obstacles can later avoid blocking the one guaranteed route.
+    vector<pair<int, int>> carveRoad(int r, int c, int destR, int destC) {
+        vector<pair<int, int>> path;
+        while (r != destR || c != destC) {
+            cells[r][c] = ROAD;
+            path.push_back({ r, c });
+            bool moveRow = (rand() % 2 == 0);
+            if (r == destR) moveRow = false;
+            if (c == destC) moveRow = true;
+            if (moveRow) r += (destR > r) ? 1 : -1;
+            else c += (destC > c) ? 1 : -1;
+        }
+        cells[destR][destC] = ROAD;
+        path.push_back({ destR, destC });
+        return path;
+    }
+
+    // Scatters a few extra road tiles onto grass, so the road network
+    // has branches instead of being just one single-file line.
+    void addRandomRoads(int count) {
         for (int i = 0; i < count; i++) {
             int r = rand() % rows;
             int c = rand() % cols;
-            cells[r][c] = '#';
+            if (cells[r][c] == GRASS) cells[r][c] = ROAD;
+        }
+    }
+
+    // Upgrades a few existing road tiles into speed roads / tunnels,
+    // and drops a few obstacles -- all without ever touching the start
+    // or destination cell. Walls additionally avoid the critical path
+    // so there's always at least one way through.
+    void addRoadFeatures(int speedCount, int tunnelCount, int wallCount,
+                          int potholeCount, int startR, int startC,
+                          int destR, int destC,
+                          const vector<pair<int, int>>& criticalPath) {
+        auto onCriticalPath = [&](int r, int c) {
+            for (size_t i = 0; i < criticalPath.size(); i++) {
+                if (criticalPath[i].first == r && criticalPath[i].second == c) return true;
+            }
+            return false;
+        };
+        auto randomRoadCell = [&](bool avoidCriticalPath) {
+            for (int attempt = 0; attempt < 500; attempt++) {
+                int r = rand() % rows;
+                int c = rand() % cols;
+                if (cells[r][c] == ROAD &&
+                    !(r == startR && c == startC) &&
+                    !(r == destR && c == destC) &&
+                    !(avoidCriticalPath && onCriticalPath(r, c))) {
+                    return make_pair(r, c);
+                }
+            }
+            return make_pair(-1, -1); // no spot found; caller must check
+        };
+
+        for (int i = 0; i < speedCount; i++) {
+            auto cell = randomRoadCell(false);
+            if (cell.first != -1) cells[cell.first][cell.second] = SPEED_ROAD;
+        }
+        for (int i = 0; i < tunnelCount; i++) {
+            auto cell = randomRoadCell(false);
+            if (cell.first != -1) cells[cell.first][cell.second] = TUNNEL;
+        }
+        for (int i = 0; i < wallCount; i++) {
+            auto cell = randomRoadCell(true); // never block the only path
+            if (cell.first != -1) cells[cell.first][cell.second] = WALL;
+        }
+        for (int i = 0; i < potholeCount; i++) {
+            auto cell = randomRoadCell(false); // doesn't block movement
+            if (cell.first != -1) cells[cell.first][cell.second] = POTHOLE;
         }
     }
 };
@@ -54,6 +177,15 @@ class Wall : public Obstacle {
 public:
     void onHit() override {
         cout << "Crashed into a wall!\n";
+    }
+};
+
+// A pothole doesn't end the game -- it just costs you control of the
+// car for a second while it "gets stuck."
+class Pothole : public Obstacle {
+public:
+    void onHit() override {
+        cout << "Stuck in a pothole! Lost a second.\n";
     }
 };
 
@@ -78,10 +210,62 @@ pair<int, int> randomCell(int rows, int cols) {
     return { rand() % rows, rand() % cols };
 }
 
+// Background tiles (grass/road/speed/tunnel/wall/pothole) with no car or
+// destination on them. Background tiles are always a real visible glyph,
+// never a blank space -- a blank space colored a certain way is still
+// invisible, so "the road network" wouldn't actually show up on screen.
+void printTile(char tile, bool emojiMode) {
+    switch (tile) {
+        case GRASS:
+            setColor(COLOR_GRASS);
+            cout << ". ";
+            break;
+        case SPEED_ROAD:
+            setColor(COLOR_SPEED);
+            if (emojiMode) cout << "\xE2\x9A\xA1\xEF\xB8\x8F"; // ⚡️
+            else cout << "s ";
+            break;
+        case TUNNEL:
+            setColor(COLOR_TUNNEL);
+            if (emojiMode) cout << "\xF0\x9F\x9A\x87"; // 🚇
+            else cout << "t ";
+            break;
+        case WALL:
+            setColor(COLOR_WALL);
+            if (emojiMode) cout << "\xF0\x9F\xA7\xB1"; // 🧱
+            else cout << "# ";
+            break;
+        case POTHOLE:
+            setColor(COLOR_POTHOLE);
+            if (emojiMode) cout << "\xF0\x9F\x95\xB3"; // 🕳
+            else cout << "p ";
+            break;
+        default: // ROAD
+            setColor(COLOR_ROAD);
+            cout << "- ";
+            break;
+    }
+    setColor(COLOR_DEFAULT);
+}
+
 void printGrid(const Grid& grid, const Car& car, int destRow, int destCol,
-               const vector<Car>& randomCars) {
+               const vector<Car>& randomCars, bool fogOn, int fogRadius,
+               bool emojiMode) {
     for (int r = 0; r < grid.rows; r++) {
         for (int c = 0; c < grid.cols; c++) {
+            // Weather fog: anything outside the car's visible radius is
+            // hidden, no matter what's actually there.
+            if (fogOn) {
+                int dr = abs(r - car.row);
+                int dc = abs(c - car.col);
+                if (max(dr, dc) > fogRadius) {
+                    setColor(COLOR_FOG);
+                    cout << (emojiMode ? "\xE2\x98\x81\xEF\xB8\x8F" : "? "); // ☁️
+                    setColor(COLOR_DEFAULT);
+                    continue;
+                }
+            }
+
             bool isRandomCar = false;
             for (size_t i = 0; i < randomCars.size(); i++) {
                 if (randomCars[i].row == r && randomCars[i].col == c) {
@@ -90,18 +274,26 @@ void printGrid(const Grid& grid, const Car& car, int destRow, int destCol,
                 }
             }
 
-            char ch;
-            if (r == car.row && c == car.col) ch = 'C';
-            else if (r == destRow && c == destCol) ch = 'D';
-            else if (isRandomCar) ch = 'R';
-            else ch = grid.cells[r][c];
+            bool isPlayerHere = (r == car.row && c == car.col);
+            bool inTunnel = grid.isTunnel(r, c);
 
-            // A monospace character cell is about twice as tall as it
-            // is wide, so printing a trailing space after each one
-            // doubles its on-screen width -- that's what makes an
-            // NxN grid actually look square instead of twice as wide
-            // as it is tall.
-            cout << ch << ' ';
+            // A car hiding in a tunnel is NOT drawn -- the tile itself
+            // still shows (so the player can see a tunnel is there),
+            // but the car marker disappears while it's inside one.
+            if (isPlayerHere && !inTunnel) {
+                setColor(COLOR_CAR);
+                cout << (emojiMode ? "\xF0\x9F\x9A\x97" : "C "); // 🚗
+            } else if (r == destRow && c == destCol) {
+                setColor(COLOR_DEST);
+                cout << (emojiMode ? "\xF0\x9F\x8F\x81" : "D "); // 🏁
+            } else if (isRandomCar && !inTunnel) {
+                setColor(COLOR_RANDOMCAR);
+                cout << (emojiMode ? "\xF0\x9F\x9A\x99" : "R "); // 🚙
+            } else {
+                printTile(grid.cells[r][c], emojiMode);
+                continue;
+            }
+            setColor(COLOR_DEFAULT);
         }
         cout << "\n";
     }
@@ -112,8 +304,9 @@ bool checkWin(const Car& car, int destRow, int destCol) {
 }
 
 // Picks one of the 4 directions at random and moves the car there if
-// it's a legal move. If the random pick is a wall or off the grid, the
-// car just stays put for this tick and tries again next time.
+// it's a legal move (on a road, not grass or a wall). If the random
+// pick is off-road or off the grid, the car just stays put for this
+// tick and tries again next time.
 void moveRandomCar(Car& c, const Grid& grid) {
     int dirs[4] = { 72, 80, 75, 77 }; // Up, Down, Left, Right
     int pick = dirs[rand() % 4];
@@ -127,7 +320,7 @@ void moveRandomCar(Car& c, const Grid& grid) {
         case 77: newCol++; break;
     }
 
-    if (grid.isInBounds(newRow, newCol) && !grid.isWall(newRow, newCol)) {
+    if (grid.isInBounds(newRow, newCol) && !grid.isBlocked(newRow, newCol)) {
         c.moveTo(newRow, newCol);
     }
 }
@@ -158,43 +351,7 @@ string directionName(int key) {
 
 int main() {
     srand((unsigned)time(0));
-
-    int consoleCols, consoleRows;
-    getConsoleSize(consoleCols, consoleRows);
-
-    // Leave a few lines below the grid for the status line and the
-    // win/lose message, and one less column so the last cell doesn't
-    // land exactly on the console's auto-wrap edge. Each printed cell
-    // is now 2 characters wide (see printGrid), so divide the usable
-    // width by 2 to get the actual column count -- this is also what
-    // makes a square grid come out visually square on screen.
-    int gridCols = (consoleCols - 1) / 2;
-    int gridRows = consoleRows - 4;
-
-    try {
-        if (gridCols < 5 || gridCols > 50) throw BadGridSize();
-        if (gridRows < 5 || gridRows > 50) throw BadGridSize();
-    } catch (BadGridSize& e) {
-        cout << e.what() << " -- clamping grid to fit.\n";
-        if (gridCols < 5) gridCols = 5;
-        if (gridCols > 50) gridCols = 50;
-        if (gridRows < 5) gridRows = 5;
-        if (gridRows > 50) gridRows = 50;
-    }
-
-    Grid grid(gridRows, gridCols);
-    grid.addRandomWalls(gridRows * gridCols / 10); // ~10% of cells are walls
-
-    Car car;
-    pair<int, int> start = randomCell(gridRows, gridCols);
-    car.moveTo(start.first, start.second);
-
-    pair<int, int> dest = randomCell(gridRows, gridCols);
-    while (dest == start) dest = randomCell(gridRows, gridCols);
-
-    vector<Obstacle*> obstacles;
-    Wall wall;
-    obstacles.push_back(&wall);
+    SetConsoleOutputCP(CP_UTF8); // so the emoji byte escapes above render as UTF-8
 
     cout << "Enter auto-drive interval in seconds (e.g. 1.0): ";
     double moveIntervalSec = 1.0;
@@ -206,143 +363,251 @@ int main() {
     cin >> numRandomCars;
     if (numRandomCars < 0) numRandomCars = 0;
 
-    vector<Car> randomCars(numRandomCars);
-    for (int i = 0; i < numRandomCars; i++) {
-        pair<int, int> spot;
-        do {
-            spot = randomCell(gridRows, gridCols);
-        } while (grid.isWall(spot.first, spot.second) || spot == start || spot == dest);
-        randomCars[i].moveTo(spot.first, spot.second);
-    }
+    bool emojiMode = false; // off by default -- see the note at the top of this file
+    bool playAgain = true;
 
-    bool gameOver = false;
-    bool autoDrive = false;
-    int currentDir = 0; // last direction picked; 0 = none yet
-    auto lastMoveTime = chrono::steady_clock::now();        // player's own auto-drive tick
-    auto lastRandomMoveTime = chrono::steady_clock::now();  // random cars' tick
-    auto startTime = chrono::steady_clock::now();           // whole-run timer
+    while (playAgain) {
+        int consoleCols, consoleRows;
+        getConsoleSize(consoleCols, consoleRows);
 
-    bool needRedraw = true; // only redraw when something actually changed
+        // Leave a few lines below the grid for the status line and the
+        // win/lose message, and one less column so the last cell doesn't
+        // land exactly on the console's auto-wrap edge. Each printed cell
+        // is 2 characters wide (see printTile/printGrid), so divide the
+        // usable width by 2 to get the actual column count -- this is
+        // also what makes a square grid come out visually square.
+        int gridCols = (consoleCols - 1) / 2;
+        int gridRows = consoleRows - 4;
 
-    while (!gameOver) {
-        // The clock itself ticks every loop (not just on needRedraw), so the
-        // on-screen timer updates every second even while nothing else changed.
-        int elapsedWhole = (int)chrono::duration<double>(
-            chrono::steady_clock::now() - startTime).count();
-        static int lastShownSec = -1;
-        if (elapsedWhole != lastShownSec) {
-            lastShownSec = elapsedWhole;
-            needRedraw = true;
+        try {
+            if (gridCols < 5 || gridCols > 50) throw BadGridSize();
+            if (gridRows < 5 || gridRows > 50) throw BadGridSize();
+        } catch (BadGridSize& e) {
+            cout << e.what() << " -- clamping grid to fit.\n";
+            if (gridCols < 5) gridCols = 5;
+            if (gridCols > 50) gridCols = 50;
+            if (gridRows < 5) gridRows = 5;
+            if (gridRows > 50) gridRows = 50;
         }
 
-        if (needRedraw) {
-            system("cls");
-            printGrid(grid, car, dest.first, dest.second, randomCars);
-            cout << "Time: " << elapsedWhole << "s | ";
-            cout << "Arrows move. A = toggle auto-drive (" << moveIntervalSec << "s). "
-                 << "Auto-drive: " << (autoDrive ? "ON" : "OFF")
-                 << ", direction: " << directionName(currentDir);
-            if (!autoDrive && currentDir == 0) {
-                cout << " (press an arrow key first, then A)";
-            }
-            cout << "\n";
-            needRedraw = false;
+        Grid grid(gridRows, gridCols);
+
+        Car car;
+        pair<int, int> start = randomCell(gridRows, gridCols);
+        car.moveTo(start.first, start.second);
+
+        pair<int, int> dest = randomCell(gridRows, gridCols);
+        while (dest == start) dest = randomCell(gridRows, gridCols);
+
+        vector<pair<int, int>> criticalPath =
+            grid.carveRoad(start.first, start.second, dest.first, dest.second);
+        grid.addRandomRoads(gridRows * gridCols / 4); // extra branches off the main road
+        grid.addRoadFeatures(/*speed*/3, /*tunnel*/2, /*walls*/4, /*potholes*/3,
+                              start.first, start.second, dest.first, dest.second,
+                              criticalPath);
+
+        Wall wall;
+        Pothole pothole;
+        vector<Obstacle*> obstacles;
+        obstacles.push_back(&wall);    // obstacles[0] = crash
+        obstacles.push_back(&pothole); // obstacles[1] = stall
+
+        vector<Car> randomCars(numRandomCars);
+        for (int i = 0; i < numRandomCars; i++) {
+            pair<int, int> spot;
+            do {
+                spot = randomCell(gridRows, gridCols);
+            } while (grid.isBlocked(spot.first, spot.second) ||
+                     spot == start || spot == dest);
+            randomCars[i].moveTo(spot.first, spot.second);
         }
 
-        int newRow = car.row;
-        int newCol = car.col;
-        int key = -1;
-        bool playerMoved = false;
+        bool gameOver = false;
+        bool autoDrive = false;
+        bool fogOn = false;
+        int fogRadius = 5;
+        int currentDir = 0; // last direction picked; 0 = none yet
+        auto lastMoveTime = chrono::steady_clock::now();        // player's own auto-drive tick
+        auto lastRandomMoveTime = chrono::steady_clock::now();  // random cars' tick
+        auto startTime = chrono::steady_clock::now();           // whole-run timer
+        auto stalledUntil = chrono::steady_clock::now();        // not stalled yet
+        int lastShownSec = -1;
 
-        // Always a non-blocking key check (even in manual mode), so the
-        // random cars keep moving on their own interval whether or not
-        // the player is pressing anything.
-        if (_kbhit()) {
-            key = _getch();
-            if (key == 224) key = _getch();
-        }
+        bool needRedraw = true; // only redraw when something actually changed
 
-        if (key == 'a' || key == 'A') {
-            if (autoDrive) {
-                autoDrive = false;
-            } else if (currentDir != 0) {
-                autoDrive = true;
-                lastMoveTime = chrono::steady_clock::now();
-            }
-            needRedraw = true;
-        } else if (key == 72 || key == 80 || key == 75 || key == 77) {
-            currentDir = key; // remember the direction either way
-            needRedraw = true;
-            if (!autoDrive) {
-                // Manual mode: move right away on key press.
-                switch (key) {
-                    case 72: newRow--; break;
-                    case 80: newRow++; break;
-                    case 75: newCol--; break;
-                    case 77: newCol++; break;
-                }
-                playerMoved = true;
-            }
-        }
-
-        if (autoDrive && !playerMoved) {
-            auto now = chrono::steady_clock::now();
-            double elapsed = chrono::duration<double>(now - lastMoveTime).count();
-            if (elapsed >= moveIntervalSec) {
-                lastMoveTime = now;
-                switch (currentDir) {
-                    case 72: newRow--; break; // Up
-                    case 80: newRow++; break; // Down
-                    case 75: newCol--; break; // Left
-                    case 77: newCol++; break; // Right
-                }
-                playerMoved = true;
-            }
-        }
-
-        // Random cars tick on the same interval as auto-drive, but on
-        // their own clock -- they keep moving even if the player's own
-        // auto-drive is off or hasn't started yet.
-        if (!randomCars.empty()) {
-            auto now = chrono::steady_clock::now();
-            double elapsed = chrono::duration<double>(now - lastRandomMoveTime).count();
-            if (elapsed >= moveIntervalSec) {
-                lastRandomMoveTime = now;
-                for (size_t i = 0; i < randomCars.size(); i++) {
-                    moveRandomCar(randomCars[i], grid);
-                }
+        while (!gameOver) {
+            // The clock itself ticks every loop (not just on needRedraw), so the
+            // on-screen timer updates every second even while nothing else changed.
+            int elapsedWhole = (int)chrono::duration<double>(
+                chrono::steady_clock::now() - startTime).count();
+            if (elapsedWhole != lastShownSec) {
+                lastShownSec = elapsedWhole;
                 needRedraw = true;
             }
-        }
 
-        if (!playerMoved) {
-            if (!needRedraw) Sleep(30); // avoid spinning the CPU while nothing happens
-            continue;
-        }
+            if (needRedraw) {
+                system("cls");
+                printGrid(grid, car, dest.first, dest.second, randomCars,
+                          fogOn, fogRadius, emojiMode);
+                setColor(COLOR_DEFAULT);
+                cout << "Time: " << elapsedWhole << "s | ";
 
-        needRedraw = true;
+                bool isStalledNow = chrono::steady_clock::now() < stalledUntil;
+                if (isStalledNow) {
+                    setColor(COLOR_POTHOLE);
+                    cout << "STUCK! ";
+                    setColor(COLOR_DEFAULT);
+                } else if (grid.isSpeedRoad(car.row, car.col)) {
+                    setColor(COLOR_SPEED);
+                    cout << "SPEED ROAD! ";
+                    setColor(COLOR_DEFAULT);
+                } else if (grid.isTunnel(car.row, car.col)) {
+                    setColor(COLOR_TUNNEL);
+                    cout << "Hidden in a tunnel! ";
+                    setColor(COLOR_DEFAULT);
+                }
 
-        if (!grid.isInBounds(newRow, newCol)) {
-            cout << "Off the grid: crashed!\n";
-            gameOver = true;
-        } else if (grid.isWall(newRow, newCol)) {
-            obstacles[0]->onHit();
-            gameOver = true;
-        } else {
-            car.moveTo(newRow, newCol);
-            if (checkWin(car, dest.first, dest.second)) {
-                printGrid(grid, car, dest.first, dest.second, randomCars);
-                cout << "You arrived!\n";
+                cout << "Arrows move. A = auto-drive (" << moveIntervalSec << "s), "
+                     << (autoDrive ? "ON" : "OFF") << " " << directionName(currentDir)
+                     << " | F = fog (" << (fogOn ? "ON" : "OFF")
+                     << "), E = emoji (" << (emojiMode ? "ON" : "OFF") << ")";
+                if (!autoDrive && currentDir == 0) {
+                    cout << " (press an arrow first, then A)";
+                }
+                cout << "\n";
+                needRedraw = false;
+            }
+
+            int newRow = car.row;
+            int newCol = car.col;
+            int key = -1;
+            bool playerMoved = false;
+
+            // Always a non-blocking key check (even in manual mode), so the
+            // random cars keep moving on their own interval whether or not
+            // the player is pressing anything.
+            if (_kbhit()) {
+                key = _getch();
+                if (key == 224) key = _getch();
+            }
+
+            if (key == 'a' || key == 'A') {
+                if (autoDrive) {
+                    autoDrive = false;
+                } else if (currentDir != 0) {
+                    autoDrive = true;
+                    lastMoveTime = chrono::steady_clock::now();
+                }
+                needRedraw = true;
+            } else if (key == 'f' || key == 'F') {
+                fogOn = !fogOn;
+                needRedraw = true;
+            } else if (key == 'e' || key == 'E') {
+                emojiMode = !emojiMode;
+                needRedraw = true;
+            } else if (key == 72 || key == 80 || key == 75 || key == 77) {
+                if (key != currentDir) playTurnSound(); // beep only on an actual change
+                currentDir = key; // remember the direction either way
+                needRedraw = true;
+                if (!autoDrive) {
+                    // Manual mode: move right away on key press.
+                    switch (key) {
+                        case 72: newRow--; break;
+                        case 80: newRow++; break;
+                        case 75: newCol--; break;
+                        case 77: newCol++; break;
+                    }
+                    playerMoved = true;
+                }
+            }
+
+            if (autoDrive && !playerMoved) {
+                auto now = chrono::steady_clock::now();
+                double elapsed = chrono::duration<double>(now - lastMoveTime).count();
+                // Standing on a speed road halves the wait between auto-drive moves.
+                double interval = grid.isSpeedRoad(car.row, car.col)
+                                       ? moveIntervalSec / 2.0 : moveIntervalSec;
+                if (elapsed >= interval) {
+                    lastMoveTime = now;
+                    switch (currentDir) {
+                        case 72: newRow--; break; // Up
+                        case 80: newRow++; break; // Down
+                        case 75: newCol--; break; // Left
+                        case 77: newCol++; break; // Right
+                    }
+                    playerMoved = true;
+                }
+            }
+
+            // A pothole stall overrides everything above -- no key press or
+            // auto-drive tick can move the car while it's stuck.
+            bool isStalled = chrono::steady_clock::now() < stalledUntil;
+            if (isStalled) playerMoved = false;
+
+            // Random cars tick on the same interval as auto-drive, but on
+            // their own clock -- they keep moving even if the player's own
+            // auto-drive is off, stalled, or hasn't started yet.
+            if (!randomCars.empty()) {
+                auto now = chrono::steady_clock::now();
+                double elapsed = chrono::duration<double>(now - lastRandomMoveTime).count();
+                if (elapsed >= moveIntervalSec) {
+                    lastRandomMoveTime = now;
+                    for (size_t i = 0; i < randomCars.size(); i++) {
+                        moveRandomCar(randomCars[i], grid);
+                    }
+                    needRedraw = true;
+                }
+            }
+
+            if (!playerMoved) {
+                if (!needRedraw) Sleep(30); // avoid spinning the CPU while nothing happens
+                continue;
+            }
+
+            needRedraw = true;
+
+            if (!grid.isInBounds(newRow, newCol)) {
+                cout << "Off the grid: crashed!\n";
+                playCrashSound();
                 gameOver = true;
+            } else if (grid.isWall(newRow, newCol)) {
+                obstacles[0]->onHit();
+                playCrashSound();
+                gameOver = true;
+            } else if (grid.isGrass(newRow, newCol)) {
+                cout << "Roads only -- can't drive on grass!\n";
+                Sleep(400); // brief pause so the message is actually readable
+            } else if (grid.isPothole(newRow, newCol)) {
+                car.moveTo(newRow, newCol);
+                obstacles[1]->onHit();
+                playPotholeSound();
+                stalledUntil = chrono::steady_clock::now() + chrono::milliseconds(1000);
+            } else {
+                car.moveTo(newRow, newCol);
+                if (checkWin(car, dest.first, dest.second)) {
+                    printGrid(grid, car, dest.first, dest.second, randomCars,
+                              fogOn, fogRadius, emojiMode);
+                    setColor(COLOR_DEFAULT);
+                    cout << "You arrived!\n";
+                    gameOver = true;
+                }
+            }
+
+            if (gameOver) {
+                double totalSec = chrono::duration<double>(
+                    chrono::steady_clock::now() - startTime).count();
+                setColor(COLOR_DEFAULT);
+                cout << "Time: " << totalSec << " seconds\n";
             }
         }
 
-        if (gameOver) {
-            double totalSec = chrono::duration<double>(
-                chrono::steady_clock::now() - startTime).count();
-            cout << "Time: " << totalSec << " seconds\n";
-        }
+        cout << "\nPress R to try again, or any other key to quit...";
+        int choice = _getch();
+        if (choice == 224) _getch(); // swallow an arrow key's second byte, if pressed
+        playAgain = (choice == 'r' || choice == 'R');
+        if (playAgain) cout << "\n";
     }
 
+    setColor(COLOR_DEFAULT);
     return 0;
 }
