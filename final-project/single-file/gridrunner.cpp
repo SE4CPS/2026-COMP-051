@@ -88,58 +88,72 @@ public:
         return r >= 0 && r < rows && c >= 0 && c < cols;
     }
 
-    // Carves a winding road from (r,c) to (destR,destC) by biasing a
-    // random walk toward the destination, so the road always actually
-    // connects start to finish. Returns every cell on that path, so
-    // obstacles can later avoid blocking the one guaranteed route.
-    vector<pair<int, int>> carveRoad(int r, int c, int destR, int destC) {
-        vector<pair<int, int>> path;
-        while (r != destR || c != destC) {
-            cells[r][c] = ROAD;
-            path.push_back({ r, c });
-            bool moveRow = (rand() % 2 == 0);
-            if (r == destR) moveRow = false;
-            if (c == destC) moveRow = true;
-            if (moveRow) r += (destR > r) ? 1 : -1;
-            else c += (destC > c) ? 1 : -1;
-        }
-        cells[destR][destC] = ROAD;
-        path.push_back({ destR, destC });
-        return path;
-    }
-
-    // Scatters a few extra road tiles onto grass, so the road network
-    // has branches instead of being just one single-file line.
-    void addRandomRoads(int count) {
-        for (int i = 0; i < count; i++) {
-            int r = rand() % rows;
-            int c = rand() % cols;
-            if (cells[r][c] == GRASS) cells[r][c] = ROAD;
+    // Lays down a real city grid: a straight horizontal street every
+    // `spacing` rows and a straight vertical street every `spacing`
+    // columns, crossing at right angles -- just like city blocks, with
+    // grass filling the inside of each block.
+    void buildCityStreets(int spacing) {
+        for (int r = 0; r < rows; r++) {
+            for (int c = 0; c < cols; c++) {
+                if (r % spacing == 0 || c % spacing == 0) {
+                    cells[r][c] = ROAD;
+                }
+            }
         }
     }
 
-    // Upgrades a few existing road tiles into speed roads / tunnels,
-    // and drops a few obstacles -- all without ever touching the start
-    // or destination cell. Walls additionally avoid the critical path
-    // so there's always at least one way through.
+    vector<pair<int, int>> allRoadCells() const {
+        vector<pair<int, int>> out;
+        for (int r = 0; r < rows; r++) {
+            for (int c = 0; c < cols; c++) {
+                if (cells[r][c] == ROAD) out.push_back({ r, c });
+            }
+        }
+        return out;
+    }
+
+    // Breadth-first search over drivable tiles only -- used to confirm
+    // a candidate wall doesn't seal off the destination before we
+    // actually commit to placing it.
+    bool isReachable(int startR, int startC, int destR, int destC) const {
+        vector<vector<bool>> visited(rows, vector<bool>(cols, false));
+        vector<pair<int, int>> queue;
+        queue.push_back({ startR, startC });
+        visited[startR][startC] = true;
+        size_t head = 0;
+        int dr[4] = { -1, 1, 0, 0 };
+        int dc[4] = { 0, 0, -1, 1 };
+        while (head < queue.size()) {
+            pair<int, int> cur = queue[head++];
+            if (cur.first == destR && cur.second == destC) return true;
+            for (int d = 0; d < 4; d++) {
+                int nr = cur.first + dr[d];
+                int nc = cur.second + dc[d];
+                if (isInBounds(nr, nc) && !visited[nr][nc] && !isBlocked(nr, nc)) {
+                    visited[nr][nc] = true;
+                    queue.push_back({ nr, nc });
+                }
+            }
+        }
+        return false;
+    }
+
+    // Upgrades a few plain road tiles into speed roads / tunnels, and
+    // drops a few obstacles -- all without ever touching the start or
+    // destination cell. Every candidate wall is tried, then checked
+    // with a BFS; it's only kept if the destination is still reachable
+    // afterward, so the grid is always solvable no matter where a wall
+    // lands in the street grid.
     void addRoadFeatures(int speedCount, int tunnelCount, int wallCount,
                           int potholeCount, int startR, int startC,
-                          int destR, int destC,
-                          const vector<pair<int, int>>& criticalPath) {
-        auto onCriticalPath = [&](int r, int c) {
-            for (size_t i = 0; i < criticalPath.size(); i++) {
-                if (criticalPath[i].first == r && criticalPath[i].second == c) return true;
-            }
-            return false;
-        };
-        auto randomRoadCell = [&](bool avoidCriticalPath) {
+                          int destR, int destC) {
+        auto randomRoadCell = [&]() {
             for (int attempt = 0; attempt < 500; attempt++) {
                 int r = rand() % rows;
                 int c = rand() % cols;
                 if (cells[r][c] == ROAD &&
                     !(r == startR && c == startC) &&
-                    !(r == destR && c == destC) &&
-                    !(avoidCriticalPath && onCriticalPath(r, c))) {
+                    !(r == destR && c == destC)) {
                     return make_pair(r, c);
                 }
             }
@@ -147,19 +161,24 @@ public:
         };
 
         for (int i = 0; i < speedCount; i++) {
-            auto cell = randomRoadCell(false);
+            auto cell = randomRoadCell();
             if (cell.first != -1) cells[cell.first][cell.second] = SPEED_ROAD;
         }
         for (int i = 0; i < tunnelCount; i++) {
-            auto cell = randomRoadCell(false);
+            auto cell = randomRoadCell();
             if (cell.first != -1) cells[cell.first][cell.second] = TUNNEL;
         }
         for (int i = 0; i < wallCount; i++) {
-            auto cell = randomRoadCell(true); // never block the only path
-            if (cell.first != -1) cells[cell.first][cell.second] = WALL;
+            for (int attempt = 0; attempt < 500; attempt++) {
+                auto cell = randomRoadCell();
+                if (cell.first == -1) break; // nowhere left to try
+                cells[cell.first][cell.second] = WALL;
+                if (isReachable(startR, startC, destR, destC)) break; // keep it
+                cells[cell.first][cell.second] = ROAD; // revert, try a different cell
+            }
         }
         for (int i = 0; i < potholeCount; i++) {
-            auto cell = randomRoadCell(false); // doesn't block movement
+            auto cell = randomRoadCell(); // doesn't block movement, no BFS needed
             if (cell.first != -1) cells[cell.first][cell.second] = POTHOLE;
         }
     }
@@ -242,7 +261,10 @@ void printTile(char tile, bool emojiMode) {
             break;
         default: // ROAD
             setColor(COLOR_ROAD);
-            cout << "- ";
+            // A double horizontal line reads as a two-lane road (the
+            // same way the real motorway emoji below already does).
+            if (emojiMode) cout << "\xF0\x9F\x9B\xA3\xEF\xB8\x8F"; // 🛣️
+            else cout << "\xE2\x95\x90\xE2\x95\x90"; // ══ (box-drawing double line)
             break;
     }
     setColor(COLOR_DEFAULT);
@@ -392,19 +414,21 @@ int main() {
 
         Grid grid(gridRows, gridCols);
 
+        // A real city grid: straight streets every 4 cells, crossing at
+        // right angles, with grass filling the blocks in between.
+        const int STREET_SPACING = 4;
+        grid.buildCityStreets(STREET_SPACING);
+
+        vector<pair<int, int>> roadCells = grid.allRoadCells();
+        pair<int, int> start = roadCells[rand() % roadCells.size()];
+        pair<int, int> dest = roadCells[rand() % roadCells.size()];
+        while (dest == start) dest = roadCells[rand() % roadCells.size()];
+
         Car car;
-        pair<int, int> start = randomCell(gridRows, gridCols);
         car.moveTo(start.first, start.second);
 
-        pair<int, int> dest = randomCell(gridRows, gridCols);
-        while (dest == start) dest = randomCell(gridRows, gridCols);
-
-        vector<pair<int, int>> criticalPath =
-            grid.carveRoad(start.first, start.second, dest.first, dest.second);
-        grid.addRandomRoads(gridRows * gridCols / 4); // extra branches off the main road
         grid.addRoadFeatures(/*speed*/3, /*tunnel*/2, /*walls*/4, /*potholes*/3,
-                              start.first, start.second, dest.first, dest.second,
-                              criticalPath);
+                              start.first, start.second, dest.first, dest.second);
 
         Wall wall;
         Pothole pothole;
