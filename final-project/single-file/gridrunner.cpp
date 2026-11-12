@@ -241,29 +241,36 @@ void printTile(char tile, bool emojiMode) {
             break;
         case SPEED_ROAD:
             setColor(COLOR_SPEED);
-            if (emojiMode) cout << "\xE2\x9A\xA1\xEF\xB8\x8F"; // ⚡️
+            // Every tile -- ASCII or emoji -- prints as exactly 2 output
+            // characters, glyph then a trailing space. Relying on an
+            // emoji rendering "double-wide" in the terminal instead of
+            // padding it ourselves is what let road/wall/etc. tiles
+            // drift narrower than grass tiles and throw the whole row
+            // out of alignment (reported: streets visibly stopping
+            // partway across, grass leaking in on the right).
+            if (emojiMode) cout << "\xE2\x9A\xA1\xEF\xB8\x8F "; // ⚡️
             else cout << "s ";
             break;
         case TUNNEL:
             setColor(COLOR_TUNNEL);
-            if (emojiMode) cout << "\xF0\x9F\x9A\x87"; // 🚇
+            if (emojiMode) cout << "\xF0\x9F\x9A\x87 "; // 🚇
             else cout << "t ";
             break;
         case WALL:
             setColor(COLOR_WALL);
-            if (emojiMode) cout << "\xF0\x9F\xA7\xB1"; // 🧱
+            if (emojiMode) cout << "\xF0\x9F\xA7\xB1 "; // 🧱
             else cout << "# ";
             break;
         case POTHOLE:
             setColor(COLOR_POTHOLE);
-            if (emojiMode) cout << "\xF0\x9F\x95\xB3"; // 🕳
+            if (emojiMode) cout << "\xF0\x9F\x95\xB3 "; // 🕳
             else cout << "p ";
             break;
         default: // ROAD
             setColor(COLOR_ROAD);
             // A double horizontal line reads as a two-lane road (the
             // same way the real motorway emoji below already does).
-            if (emojiMode) cout << "\xF0\x9F\x9B\xA3\xEF\xB8\x8F"; // 🛣️
+            if (emojiMode) cout << "\xF0\x9F\x9B\xA3\xEF\xB8\x8F "; // 🛣️
             else cout << "\xE2\x95\x90\xE2\x95\x90"; // ══ (box-drawing double line)
             break;
     }
@@ -281,9 +288,11 @@ void printGrid(const Grid& grid, const Car& car, int destRow, int destCol,
                 int dr = abs(r - car.row);
                 int dc = abs(c - car.col);
                 if (max(dr, dc) > fogRadius) {
-                    setColor(COLOR_FOG);
-                    cout << (emojiMode ? "\xE2\x98\x81\xEF\xB8\x8F" : "? "); // ☁️
-                    setColor(COLOR_DEFAULT);
+                    // A hidden cell is a blank placeholder -- not a '?' or
+                    // a cloud glyph, just empty space -- so fog genuinely
+                    // reads as "nothing known is here" instead of drawing
+                    // attention to itself.
+                    cout << "  ";
                     continue;
                 }
             }
@@ -396,21 +405,29 @@ int main() {
         // win/lose message, and one less column so the last cell doesn't
         // land exactly on the console's auto-wrap edge. Each printed cell
         // is 2 characters wide (see printTile/printGrid), so divide the
-        // usable width by 2 to get the actual column count -- this is
-        // also what makes a square grid come out visually square.
-        int gridCols = (consoleCols - 1) / 2;
-        int gridRows = consoleRows - 4;
+        // usable width by 2 to get the actual column count.
+        int availCols = (consoleCols - 1) / 2;
+        int availRows = consoleRows - 4;
 
         try {
-            if (gridCols < 5 || gridCols > 50) throw BadGridSize();
-            if (gridRows < 5 || gridRows > 50) throw BadGridSize();
+            if (availCols < 5 || availCols > 50) throw BadGridSize();
+            if (availRows < 5 || availRows > 50) throw BadGridSize();
         } catch (BadGridSize& e) {
             cout << e.what() << " -- clamping grid to fit.\n";
-            if (gridCols < 5) gridCols = 5;
-            if (gridCols > 50) gridCols = 50;
-            if (gridRows < 5) gridRows = 5;
-            if (gridRows > 50) gridRows = 50;
+            if (availCols < 5) availCols = 5;
+            if (availCols > 50) availCols = 50;
+            if (availRows < 5) availRows = 5;
+            if (availRows > 50) availRows = 50;
         }
+
+        // A console window is almost never exactly as many rows tall as
+        // it is "cell-columns" wide, so using availCols/availRows as-is
+        // produces a rectangle, not a square. Force an actual N x N grid
+        // by taking the smaller of the two -- that's the only way to
+        // guarantee square regardless of the terminal's real shape.
+        int gridSize = min(availCols, availRows);
+        int gridCols = gridSize;
+        int gridRows = gridSize;
 
         Grid grid(gridRows, gridCols);
 
