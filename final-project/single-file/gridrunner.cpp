@@ -91,14 +91,45 @@ public:
     // Lays down a real city grid: a straight horizontal street every
     // `spacing` rows and a straight vertical street every `spacing`
     // columns, crossing at right angles -- just like city blocks, with
-    // grass filling the inside of each block.
+    // grass filling the inside of each block. Streets only ever land on
+    // an INTERIOR row/column (never row/col 0 or the last one) -- the
+    // outer border is walled separately by addBorderWalls(), so streets
+    // and the border never fight over the same cells.
     void buildCityStreets(int spacing) {
+        bool hasRowStreet = false, hasColStreet = false;
+        for (int r = spacing; r < rows - 1; r += spacing) {
+            hasRowStreet = true;
+            for (int c = 1; c < cols - 1; c++) cells[r][c] = ROAD;
+        }
+        for (int c = spacing; c < cols - 1; c += spacing) {
+            hasColStreet = true;
+            for (int r = 1; r < rows - 1; r++) cells[r][c] = ROAD;
+        }
+        // On a small grid, no multiple of `spacing` may land inside the
+        // border at all -- guarantee at least one street each way so the
+        // interior is never left fully disconnected grass.
+        if (!hasRowStreet) {
+            int r = rows / 2;
+            for (int c = 1; c < cols - 1; c++) cells[r][c] = ROAD;
+        }
+        if (!hasColStreet) {
+            int c = cols / 2;
+            for (int r = 1; r < rows - 1; r++) cells[r][c] = ROAD;
+        }
+    }
+
+    // Walls off the entire outer edge -- row 0, the last row, column 0,
+    // and the last column -- so every side of the grid is a solid
+    // boundary, not just whichever edge happened to line up with a
+    // street.
+    void addBorderWalls() {
+        for (int c = 0; c < cols; c++) {
+            cells[0][c] = WALL;
+            cells[rows - 1][c] = WALL;
+        }
         for (int r = 0; r < rows; r++) {
-            for (int c = 0; c < cols; c++) {
-                if (r % spacing == 0 || c % spacing == 0) {
-                    cells[r][c] = ROAD;
-                }
-            }
+            cells[r][0] = WALL;
+            cells[r][cols - 1] = WALL;
         }
     }
 
@@ -432,9 +463,11 @@ int main() {
         Grid grid(gridRows, gridCols);
 
         // A real city grid: straight streets every 4 cells, crossing at
-        // right angles, with grass filling the blocks in between.
+        // right angles, with grass filling the blocks in between, walled
+        // in on every side.
         const int STREET_SPACING = 4;
         grid.buildCityStreets(STREET_SPACING);
+        grid.addBorderWalls();
 
         vector<pair<int, int>> roadCells = grid.allRoadCells();
         pair<int, int> start = roadCells[rand() % roadCells.size()];
